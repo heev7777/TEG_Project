@@ -9,9 +9,9 @@ faiss-cpu>=1.7.4
 pypdf>=4.0.0
 sentence-transformers>=2.2.2
 tiktoken>=0.5.2
-langsmith>=0.0.87
+langsmith>=0.1.0
 pydantic>=2.5.3
-pydantic-settings>=2.1.0
+pydantic-settings>=2.0.0
 python-multipart>=0.0.6
-httpx>=0.26.0
-pytest>=8.0.0 
+httpx>=0.25.0
+uuid

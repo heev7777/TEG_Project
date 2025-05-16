@@ -1,26 +1,30 @@
-from pydantic import BaseModel
+# app/core/schemas.py
+from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
 
-class FeatureExtractionRequest(BaseModel):
-    """Request model for feature extraction."""
-    product_document_ids: List[str]
-    features_list: List[str]
+class MCPToolCallRequest(BaseModel):
+    method: str
+    params: Dict
 
-class FeatureExtractionResponse(BaseModel):
-    """Response model for feature extraction."""
-    results: Dict[str, Dict[str, str]]
+class MCPToolCallResponse(BaseModel):
+    result: Optional[Dict] = None
+    error: Optional[Dict] = None
 
-class ProductComparisonRequest(BaseModel):
-    """Request model for product comparison."""
-    product_ids: List[str]
-    features: List[str]
+# --- MCP Tool: extract_features_from_specs ---
+class ExtractFeaturesParams(BaseModel):
+    product_references: List[str] = Field(..., description="List of unique references for processed product documents.")
+    features_list: List[str] = Field(..., description="List of features to extract.")
 
-class ProductComparisonResponse(BaseModel):
-    """Response model for product comparison."""
-    comparison_results: Dict[str, Dict[str, str]]
-    analysis: Optional[str] = None
+class ExtractFeaturesResult(BaseModel):
+    comparison_data: Dict[str, Dict[str, str]]
 
-class HealthCheckResponse(BaseModel):
-    """Response model for health check endpoint."""
-    status: str
-    version: str = "1.0.0" 
+# --- Streamlit Communication (if app/main.py calls a separate FastAPI backend) ---
+class ComparisonRequest(BaseModel):
+    uploaded_file_details: List[Dict]
+    features_to_compare: List[str]
+    products_to_compare: List[str]
+
+class ComparisonResponse(BaseModel):
+    comparison_table: Dict[str, Dict[str, str]]
+    message: Optional[str] = None
+    error: Optional[str] = None

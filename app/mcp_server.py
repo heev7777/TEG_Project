@@ -1,62 +1,125 @@
+# app/mcp_server.py
 from fastapi import FastAPI, HTTPException
+from typing import List, Dict
 import uvicorn
-from app.core.config import get_settings
-from app.core.schemas import (
-    FeatureExtractionRequest,
-    FeatureExtractionResponse,
-    HealthCheckResponse
-)
+import logging
+
+from app.core.config import settings
+from app.core.schemas import ExtractFeaturesParams, ExtractFeaturesResult, MCPToolCallRequest, MCPToolCallResponse
 from app.rag_processor import RAGProcessor
-from app.utils.logger import setup_logger
 
-# Initialize settings and logger
-settings = get_settings()
-logger = setup_logger(__name__)
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Product Feature Comparison MCP Server")
-rag_processor = RAGProcessor()
+# --- RAG Processor Singleton ---
+# This instance will live as long as the MCP server process.
+# For a stateless server or multi-worker setup, RAG state (vector stores)
+# would need to be managed differently (e.g., external DB, shared cache, or re-loaded per request if docs are few).
+# For this project, a singleton holding state for uploaded docs in a session is acceptable.
+# The `doc_references` passed to the tool will map to documents processed by this singleton.
+# The Streamlit app (or backend) will need to first "upload/process" docs via RAGProcessor
+# before calling this MCP tool with the references. This implies the MCP server might need
+# an endpoint to register/process documents if it's truly independent, or the RAGProcessor
+# is shared/accessible by both the component that loads docs and the MCP tool logic.
 
-@app.post("/mcp/extract_features", response_model=FeatureExtractionResponse)
-async def extract_features(request: FeatureExtractionRequest):
+# For simplicity in this project, let's assume the RAGProcessor is instantiated here
+# and the app/main.py (or backend) will *also* instantiate it and call `add_document`.
+# This is a slight cheat for a truly decoupled MCP server, but manageable for a solo project.
+# A better approach for true decoupling:
+# 1. Streamlit uploads to a shared temp location.
+# 2. MCP tool `extract_features` receives file paths. It then loads them into its own RAGProcessor instance.
+# This is more stateless for the tool but means re-processing files on each MCP call.
+# Alternative for shared state: A global RAG processor or a dependency injection system for FastAPI.
+
+# Let's go with a dependency injection approach for RAGProcessor for better testability and management.
+# This RAG processor instance will be created once per server startup.
+# The Streamlit app will need to interact with endpoints on *this server* to add documents
+# before the agent calls the MCP tool.
+
+# Global instance (simple approach for now, consider dependency injection for larger apps)
+# This means the state (loaded documents) is held by this MCP server instance.
+# Your streamlit app will need to call an endpoint on this server to load docs.
+rag_processor_instance = RAGProcessor()
+
+app = FastAPI(
+    title=settings.PROJECT_NAME + " - MCP Server",
+    version=settings.VERSION,
+    description=settings.DESCRIPTION + " This server exposes tools via Model Context Protocol."
+)
+
+def _tool_extract_features_from_specs(params: ExtractFeaturesParams) -> ExtractFeaturesResult:
     """
-    Extract specified features from product documents.
-    
-    Args:
-        request: FeatureExtractionRequest containing product document IDs and features to extract
-        
-    Returns:
-        FeatureExtractionResponse containing extracted feature values for each product
+    Extracts specified features from pre-processed product documents.
     """
-    try:
-        logger.info(f"Processing feature extraction request for products: {request.product_document_ids}")
-        results = {}
-        
-        # Process each product document
-        for product_id in request.product_document_ids:
-            # TODO: Implement document loading based on product_id
-            # For now, we'll assume the document is already processed
-            
-            # Extract features for this product
-            product_features = {}
-            for feature in request.features_list:
-                value = rag_processor.extract_feature(feature)
-                product_features[feature] = value if value else "Not found"
-            
-            results[product_id] = product_features
-            logger.info(f"Extracted features for product {product_id}")
-        
-        return FeatureExtractionResponse(results=results)
-    
-    except Exception as e:
-        logger.error(f"Error processing feature extraction request: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    logger.info(f"MCP Tool: extract_features_from_specs called with params: {params}")
+    results_data: Dict[str, Dict[str, str]] = {}
+    for doc_ref in params.product_references:
+        if doc_ref not in rag_processor_instance.document_vector_stores:
+            logger.warning(f"Document reference '{doc_ref}' not processed or not found by RAG processor.")
+            results_data[doc_ref] = {feature: "Document not processed" for feature in params.features_list}
+            continue
+        product_feature_values: Dict[str, str] = {}
+        for feature_name in params.features_list:
+            value = rag_processor_instance.extract_feature_from_doc(
+                doc_reference=doc_ref,
+                feature_name=feature_name
+            )
+            product_feature_values[feature_name] = value
+        results_data[doc_ref] = product_feature_values
+    logger.info(f"MCP Tool: extract_features_from_specs returning: {results_data}")
+    return ExtractFeaturesResult(comparison_data=results_data)
 
-@app.get("/health", response_model=HealthCheckResponse)
+# --- Document Processing Endpoint (NEW) ---
+# The Streamlit app will call this first for each uploaded file.
+class ProcessDocumentRequest(BaseModel):
+    doc_reference: str
+    file_path: str
+
+class ProcessDocumentResponse(BaseModel):
+    doc_reference: str
+    status: str
+    message: str = None
+
+@app.post("/mcp/process_document", response_model=ProcessDocumentResponse)
+async def process_document_endpoint(request: ProcessDocumentRequest):
+    logger.info(f"Received request to process document: {request.doc_reference} from path: {request.file_path}")
+    success = rag_processor_instance.add_document(request.doc_reference, request.file_path)
+    if success:
+        return ProcessDocumentResponse(doc_reference=request.doc_reference, status="processed", message="Document processed successfully.")
+    else:
+        raise HTTPException(status_code=500, detail=f"Failed to process document: {request.doc_reference}")
+
+@app.post("/mcp/clear_documents", status_code=204)
+async def clear_all_documents_endpoint():
+    logger.info("Received request to clear all documents.")
+    rag_processor_instance.clear_all_documents()
+    return None
+
+# --- Main MCP Endpoint ---
+@app.post("/mcp")
+async def mcp_tool_router(call_request: MCPToolCallRequest) -> MCPToolCallResponse:
+    if call_request.method == "extract_features_from_specs":
+        try:
+            tool_params = ExtractFeaturesParams(**call_request.params)
+            result_data = _tool_extract_features_from_specs(tool_params)
+            return MCPToolCallResponse(result={"extract_features_from_specs": result_data.model_dump()})
+        except Exception as e:
+            logger.error(f"Error processing MCP call for '{call_request.method}': {e}", exc_info=True)
+            return MCPToolCallResponse(error={"code": 500, "message": str(e)})
+    else:
+        logger.error(f"Unknown MCP method: {call_request.method}")
+        return MCPToolCallResponse(error={"code": 400, "message": f"Unknown method: {call_request.method}"})
+
+@app.get("/health", summary="Health Check", tags=["Management"])
 async def health_check():
-    """Health check endpoint."""
-    return HealthCheckResponse(status="healthy")
+    logger.info("Health check endpoint called.")
+    return {"status": "healthy", "rag_docs_loaded": len(rag_processor_instance.document_vector_stores)}
 
 if __name__ == "__main__":
-    port = settings.MCP_SERVER_PORT
-    logger.info(f"Starting MCP server on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port) 
+    uvicorn.run(
+        "app.mcp_server:app",
+        host=settings.MCP_SERVER_HOST,
+        port=settings.MCP_SERVER_PORT,
+        reload=True,
+        log_level="info"
+    )
