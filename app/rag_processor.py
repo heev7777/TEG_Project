@@ -1,5 +1,5 @@
 # app/rag_processor.py
-from typing import List, Dict, Optional
+from typing import List, Dict
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -8,6 +8,7 @@ from langchain.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
 from langchain_core.runnables import RunnablePassthrough, RunnableParallel
 from langchain_core.output_parsers import StrOutputParser
+from pathlib import Path
 import logging
 from app.core.config import settings
 from app.services.document_parser import DocumentParser

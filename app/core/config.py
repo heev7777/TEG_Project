@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 from pathlib import Path
+import logging
 
 # Define the base directory of the project
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -9,16 +10,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 # Load .env file from the project root
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
+logger = logging.getLogger(__name__)
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Product Feature Comparison Assistant"
     VERSION: str = "0.1.0"
     DESCRIPTION: str = "Compare product features using RAG and Multi-Agent Systems."
 
     # LLM and LangSmith
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "your_openai_api_key_here")
+    OPENAI_API_KEY: str
     LANGCHAIN_TRACING_V2: str = os.getenv("LANGCHAIN_TRACING_V2", "true")
     LANGCHAIN_ENDPOINT: str = os.getenv("LANGCHAIN_ENDPOINT", "https_api.smith.langchain.com")
-    LANGCHAIN_API_KEY: str = os.getenv("LANGCHAIN_API_KEY", "your_langchain_api_key_here")
+    LANGCHAIN_API_KEY: str
     LANGCHAIN_PROJECT: str = os.getenv("LANGCHAIN_PROJECT", "Product-Comparison-Assistant")
     LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini") # Cheaper and faster for development
 
@@ -45,7 +48,11 @@ class Settings(BaseSettings):
         # env_file = ".env"
         # env_file_encoding = "utf-8"
 
-settings = Settings()
+try:
+    settings = Settings()
+except Exception as e:
+    logger.error(f"Configuration error: {e}. Please check your .env file for required keys.")
+    raise
 
 # Ensure upload directory exists
 settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

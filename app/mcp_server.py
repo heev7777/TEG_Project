@@ -1,11 +1,14 @@
 # app/mcp_server.py
 from fastapi import FastAPI, HTTPException
-from typing import List, Dict
+from typing import Dict
 import uvicorn
 import logging
 
 from app.core.config import settings
-from app.core.schemas import ExtractFeaturesParams, ExtractFeaturesResult, MCPToolCallRequest, MCPToolCallResponse
+from app.core.schemas import (
+    ExtractFeaturesParams, ExtractFeaturesResult, MCPToolCallRequest, MCPToolCallResponse,
+    ProcessDocumentRequest, ProcessDocumentResponse
+)
 from app.rag_processor import RAGProcessor
 
 logger = logging.getLogger(__name__)
@@ -39,7 +42,7 @@ logging.basicConfig(level=logging.INFO)
 # Global instance (simple approach for now, consider dependency injection for larger apps)
 # This means the state (loaded documents) is held by this MCP server instance.
 # Your streamlit app will need to call an endpoint on this server to load docs.
-rag_processor_instance = RAGProcessor()
+rag_processor = RAGProcessor()
 
 app = FastAPI(
     title=settings.PROJECT_NAME + " - MCP Server",
@@ -54,16 +57,13 @@ def _tool_extract_features_from_specs(params: ExtractFeaturesParams) -> ExtractF
     logger.info(f"MCP Tool: extract_features_from_specs called with params: {params}")
     results_data: Dict[str, Dict[str, str]] = {}
     for doc_ref in params.product_references:
-        if doc_ref not in rag_processor_instance.document_vector_stores:
+        if doc_ref not in rag_processor.document_vector_stores:
             logger.warning(f"Document reference '{doc_ref}' not processed or not found by RAG processor.")
             results_data[doc_ref] = {feature: "Document not processed" for feature in params.features_list}
             continue
         product_feature_values: Dict[str, str] = {}
         for feature_name in params.features_list:
-            value = rag_processor_instance.extract_feature_from_doc(
-                doc_reference=doc_ref,
-                feature_name=feature_name
-            )
+            value = rag_processor.extract_feature_from_doc(doc_ref, feature_name)
             product_feature_values[feature_name] = value
         results_data[doc_ref] = product_feature_values
     logger.info(f"MCP Tool: extract_features_from_specs returning: {results_data}")
@@ -71,19 +71,10 @@ def _tool_extract_features_from_specs(params: ExtractFeaturesParams) -> ExtractF
 
 # --- Document Processing Endpoint (NEW) ---
 # The Streamlit app will call this first for each uploaded file.
-class ProcessDocumentRequest(BaseModel):
-    doc_reference: str
-    file_path: str
-
-class ProcessDocumentResponse(BaseModel):
-    doc_reference: str
-    status: str
-    message: str = None
-
 @app.post("/mcp/process_document", response_model=ProcessDocumentResponse)
 async def process_document_endpoint(request: ProcessDocumentRequest):
     logger.info(f"Received request to process document: {request.doc_reference} from path: {request.file_path}")
-    success = rag_processor_instance.add_document(request.doc_reference, request.file_path)
+    success = rag_processor.add_document(request.doc_reference, request.file_path)
     if success:
         return ProcessDocumentResponse(doc_reference=request.doc_reference, status="processed", message="Document processed successfully.")
     else:
@@ -92,7 +83,7 @@ async def process_document_endpoint(request: ProcessDocumentRequest):
 @app.post("/mcp/clear_documents", status_code=204)
 async def clear_all_documents_endpoint():
     logger.info("Received request to clear all documents.")
-    rag_processor_instance.clear_all_documents()
+    rag_processor.clear_all_documents()
     return None
 
 # --- Main MCP Endpoint ---
@@ -113,7 +104,7 @@ async def mcp_tool_router(call_request: MCPToolCallRequest) -> MCPToolCallRespon
 @app.get("/health", summary="Health Check", tags=["Management"])
 async def health_check():
     logger.info("Health check endpoint called.")
-    return {"status": "healthy", "rag_docs_loaded": len(rag_processor_instance.document_vector_stores)}
+    return {"status": "healthy", "rag_docs_loaded": len(rag_processor.document_vector_stores)}
 
 if __name__ == "__main__":
     uvicorn.run(
