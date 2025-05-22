@@ -172,3 +172,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+uploads/
+mcp_server.log
+pytest.ini

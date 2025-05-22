@@ -1,7 +1,9 @@
 from fastapi import FastAPI, HTTPException
-from typing import Dict
+from typing import Dict, List, Any
 import uvicorn
 import logging
+import os
+from pathlib import Path
 
 from app.core.config import settings
 from app.core.schemas import (
@@ -10,8 +12,32 @@ from app.core.schemas import (
 )
 from app.rag_processor import RAGProcessor
 
+# Get the project root directory
+PROJECT_ROOT = Path(__file__).parent.parent
+LOG_FILE = PROJECT_ROOT / "mcp_server.log"
+
+# Configure logging to write to both file and console
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logger.setLevel(logging.INFO)
+
+# Create file handler
+file_handler = logging.FileHandler(LOG_FILE, mode='w')
+file_handler.setLevel(logging.INFO)
+file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+
+# Create console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(console_formatter)
+
+# Add handlers to logger
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+# Log startup message
+logger.info(f"MCP Server starting up. Log file location: {LOG_FILE}")
 
 # --- RAG Processor Singleton ---
 # This instance will live as long as the MCP server process.
@@ -71,6 +97,7 @@ def _tool_extract_features_from_specs(params: ExtractFeaturesParams) -> ExtractF
         product_feature_values: Dict[str, str] = {}
         for feature_name in params.features_list:
             try:
+                # This extraction is based on the document's content loaded into the RAG processor
                 value = rag_processor.extract_feature_from_doc(doc_ref, feature_name)
                 if value is None or value.strip() == "":
                     value = "Feature not found"
@@ -84,14 +111,46 @@ def _tool_extract_features_from_specs(params: ExtractFeaturesParams) -> ExtractF
     logger.info(f"MCP Tool: extract_features_from_specs returning: {results_data}")
     return ExtractFeaturesResult(comparison_data=results_data)
 
-# --- Document Processing Endpoint (NEW) ---
+# Helper function to extract features from file content (for simple Key: Value text files)
+def extract_features_from_text(file_path: str) -> List[str]:
+    features = set()
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if ':' in line:
+                    key, _ = line.split(':', 1)
+                    if key.strip(): # Ensure key is not empty
+                        features.add(key.strip())
+        logger.info(f"Inside extract_features_from_text - Extracted features from {os.path.basename(file_path)}: {sorted(list(features))}")
+    except Exception as e:
+        logger.error(f"Error extracting features from file {file_path}: {e}")
+        # Return empty list if extraction fails
+        return []
+    return sorted(list(features))
+
+# --- Document Processing Endpoint ---
 # The Streamlit app will call this first for each uploaded file.
 @app.post("/mcp/process_document", response_model=ProcessDocumentResponse)
 async def process_document_endpoint(request: ProcessDocumentRequest):
+    print("DEBUG: Entered process_document_endpoint") # Add print statement for immediate feedback
+    logger.info("Entered /mcp/process_document endpoint.")
     logger.info(f"Received request to process document: {request.doc_reference} from path: {request.file_path}")
     success = rag_processor.add_document(request.doc_reference, request.file_path)
+    
+    logger.info(f"rag_processor.add_document returned success: {success}")
+
+    extracted_features = None
     if success:
-        return ProcessDocumentResponse(doc_reference=request.doc_reference, status="processed", message="Document processed successfully.")
+        # If processing is successful, try to extract features from the file content
+        # This assumes the file is still accessible at the provided path.
+        # Need to handle different file types if necessary (currently only parsing text).
+        if request.file_path.lower().endswith(".txt"):
+            logger.info("Attempting to extract features from text file.") # Log before calling helper
+            extracted_features = extract_features_from_text(request.file_path)
+            logger.info(f"Extracted features for {request.doc_reference} (from extract_features_from_text): {extracted_features}")
+            
+        return ProcessDocumentResponse(doc_reference=request.doc_reference, status="processed", message="Document processed successfully.", extracted_features=extracted_features)
     else:
         raise HTTPException(status_code=500, detail=f"Failed to process document: {request.doc_reference}")
 
@@ -134,5 +193,6 @@ if __name__ == "__main__":
         host=settings.MCP_SERVER_HOST,
         port=settings.MCP_SERVER_PORT,
         reload=True,
-        log_level="info"
+        log_level="info",
+        log_config=None # Keep this None as we are managing logging manually
     )

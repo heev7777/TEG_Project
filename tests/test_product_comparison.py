@@ -41,7 +41,7 @@ Color: Space Gray""",
 }
 
 # Pytest fixture for an async HTTP client, scoped per test function or module
-@pytest_asyncio.fixture(scope="function")
+@pytest_asyncio.fixture(scope="module")
 async def mcp_client():
     # Ensure the base_url matches your running MCP server
     async with httpx.AsyncClient(base_url=f"http://{settings.MCP_SERVER_HOST}:{settings.MCP_SERVER_PORT}", timeout=30.0) as client:
