@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 from pathlib import Path
 import logging
+import pytest_asyncio
 
 # Define the base directory of the project
 BASE_DIR = Path(__file__).resolve().parent.parent.parent

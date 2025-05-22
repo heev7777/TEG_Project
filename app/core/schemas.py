@@ -2,6 +2,10 @@
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
 
+class ExtractFeaturesToolInputSchema(BaseModel):
+    product_references_str: str = Field(description="A comma-separated string of product document references (e.g., 'doc1,doc2').")
+    features_list_str: str = Field(description="A comma-separated string of features to extract (e.g., 'RAM,Price').")
+
 class ExtractFeaturesParams(BaseModel):
     product_references: List[str] = Field(..., description="List of unique references for processed product documents.")
     features_list: List[str] = Field(..., description="List of features to extract.")
@@ -25,6 +29,12 @@ class ProcessDocumentResponse(BaseModel):
     doc_reference: str
     status: str
     message: Optional[str] = None
+
+# --- Tool Input Schemas ---
+# Schema for the compare_product_features_via_mcp tool
+class CompareProductFeaturesInput(BaseModel):
+    product_references_str: str = Field(..., description="A comma-separated string of product document references (e.g., 'doc1,doc2').")
+    features_list_str: str = Field(..., description="A comma-separated string of features to extract (e.g., 'RAM,Price').")
 
 # --- Streamlit Communication (if app/main.py calls a separate FastAPI backend) ---
 class ComparisonRequest(BaseModel):

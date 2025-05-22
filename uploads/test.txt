@@ -1,0 +1,7 @@
+Product Name: Fictional Alpha Phone
+RAM: 8GB DDR5
+Storage: 256GB UFS 3.1
+Screen: 6.5 inch OLED, 120Hz
+Battery: 4500 mAh
+Price: $699
+Color: Midnight Blue

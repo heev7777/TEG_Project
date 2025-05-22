@@ -1,4 +1,3 @@
-# app/mcp_server.py
 from fastapi import FastAPI, HTTPException
 from typing import Dict
 import uvicorn
@@ -56,16 +55,32 @@ def _tool_extract_features_from_specs(params: ExtractFeaturesParams) -> ExtractF
     """
     logger.info(f"MCP Tool: extract_features_from_specs called with params: {params}")
     results_data: Dict[str, Dict[str, str]] = {}
+    
+    # Validate input parameters
+    if not params.product_references:
+        raise ValueError("No product references provided")
+    if not params.features_list:
+        raise ValueError("No features specified for comparison")
+    
     for doc_ref in params.product_references:
         if doc_ref not in rag_processor.document_vector_stores:
             logger.warning(f"Document reference '{doc_ref}' not processed or not found by RAG processor.")
             results_data[doc_ref] = {feature: "Document not processed" for feature in params.features_list}
             continue
+            
         product_feature_values: Dict[str, str] = {}
         for feature_name in params.features_list:
-            value = rag_processor.extract_feature_from_doc(doc_ref, feature_name)
-            product_feature_values[feature_name] = value
+            try:
+                value = rag_processor.extract_feature_from_doc(doc_ref, feature_name)
+                if value is None or value.strip() == "":
+                    value = "Feature not found"
+                product_feature_values[feature_name] = value
+            except Exception as e:
+                logger.error(f"Error extracting feature '{feature_name}' from doc '{doc_ref}': {e}")
+                product_feature_values[feature_name] = f"Error: {str(e)}"
+                
         results_data[doc_ref] = product_feature_values
+        
     logger.info(f"MCP Tool: extract_features_from_specs returning: {results_data}")
     return ExtractFeaturesResult(comparison_data=results_data)
 
@@ -89,17 +104,24 @@ async def clear_all_documents_endpoint():
 # --- Main MCP Endpoint ---
 @app.post("/mcp")
 async def mcp_tool_router(call_request: MCPToolCallRequest) -> MCPToolCallResponse:
-    if call_request.method == "extract_features_from_specs":
-        try:
-            tool_params = ExtractFeaturesParams(**call_request.params)
-            result_data = _tool_extract_features_from_specs(tool_params)
-            return MCPToolCallResponse(result={"extract_features_from_specs": result_data.model_dump()})
-        except Exception as e:
-            logger.error(f"Error processing MCP call for '{call_request.method}': {e}", exc_info=True)
-            return MCPToolCallResponse(error={"code": 500, "message": str(e)})
-    else:
-        logger.error(f"Unknown MCP method: {call_request.method}")
-        return MCPToolCallResponse(error={"code": 400, "message": f"Unknown method: {call_request.method}"})
+    try:
+        if call_request.method == "extract_features_from_specs":
+            try:
+                tool_params = ExtractFeaturesParams(**call_request.params)
+                result_data = _tool_extract_features_from_specs(tool_params)
+                return MCPToolCallResponse(result={"extract_features_from_specs": result_data.model_dump()})
+            except ValueError as ve:
+                logger.error(f"Validation error in MCP call: {ve}")
+                return MCPToolCallResponse(error={"code": 400, "message": str(ve)})
+            except Exception as e:
+                logger.error(f"Error processing MCP call for '{call_request.method}': {e}", exc_info=True)
+                return MCPToolCallResponse(error={"code": 500, "message": f"Internal server error: {str(e)}"})
+        else:
+            logger.error(f"Unknown MCP method: {call_request.method}")
+            return MCPToolCallResponse(error={"code": 400, "message": f"Unknown method: {call_request.method}"})
+    except Exception as e:
+        logger.error(f"Unexpected error in MCP router: {e}", exc_info=True)
+        return MCPToolCallResponse(error={"code": 500, "message": "Internal server error"})
 
 @app.get("/health", summary="Health Check", tags=["Management"])
 async def health_check():
