@@ -14,6 +14,7 @@ class ExtractFeaturesResult(BaseModel):
     comparison_data: Dict[str, Dict[str, str]]
 
 class MCPToolCallRequest(BaseModel):
+    # tool_name: str # This was in your agents.py but not in the original schema for the /mcp endpoint
     method: str
     params: Dict[str, Any] = Field(default_factory=dict)
 
@@ -29,7 +30,7 @@ class ProcessDocumentResponse(BaseModel):
     doc_reference: str
     status: str
     message: Optional[str] = None
-    extracted_features: Optional[List[str]] = None
+    extracted_features: List[str] = Field(default_factory=list) # MODIFIED: Default to empty list
 
 # --- Tool Input Schemas ---
 # Schema for the compare_product_features_via_mcp tool

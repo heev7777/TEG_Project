@@ -4,6 +4,8 @@ import uvicorn
 import logging
 import os
 from pathlib import Path
+import datetime
+import traceback # For detailed exception printing
 
 from app.core.config import settings
 from app.core.schemas import (
@@ -12,187 +14,187 @@ from app.core.schemas import (
 )
 from app.rag_processor import RAGProcessor
 
-# Get the project root directory
-PROJECT_ROOT = Path(__file__).parent.parent
-LOG_FILE = PROJECT_ROOT / "mcp_server.log"
-
-# Configure logging to write to both file and console
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()] # Explicitly log to console
+)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
-# Create file handler
-file_handler = logging.FileHandler(LOG_FILE, mode='w')
-file_handler.setLevel(logging.INFO)
-file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(file_formatter)
+print(f"--- MCP Server Python Module Loaded (mcp_server.py top level): {datetime.datetime.now()} ---")
+logger.info(f"MCP Server (mcp_server.py top level) starting up. Basic logging configured for console.")
 
-# Create console handler
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(console_formatter)
-
-# Add handlers to logger
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
-
-# Log startup message
-logger.info(f"MCP Server starting up. Log file location: {LOG_FILE}")
-
-# --- RAG Processor Singleton ---
-# This instance will live as long as the MCP server process.
-# For a stateless server or multi-worker setup, RAG state (vector stores)
-# would need to be managed differently (e.g., external DB, shared cache, or re-loaded per request if docs are few).
-# For this project, a singleton holding state for uploaded docs in a session is acceptable.
-# The `doc_references` passed to the tool will map to documents processed by this singleton.
-# The Streamlit app (or backend) will need to first "upload/process" docs via RAGProcessor
-# before calling this MCP tool with the references. This implies the MCP server might need
-# an endpoint to register/process documents if it's truly independent, or the RAGProcessor
-# is shared/accessible by both the component that loads docs and the MCP tool logic.
-
-# For simplicity in this project, let's assume the RAGProcessor is instantiated here
-# and the app/main.py (or backend) will *also* instantiate it and call `add_document`.
-# This is a slight cheat for a truly decoupled MCP server, but manageable for a solo project.
-# A better approach for true decoupling:
-# 1. Streamlit uploads to a shared temp location.
-# 2. MCP tool `extract_features` receives file paths. It then loads them into its own RAGProcessor instance.
-# This is more stateless for the tool but means re-processing files on each MCP call.
-# Alternative for shared state: A global RAG processor or a dependency injection system for FastAPI.
-
-# Let's go with a dependency injection approach for RAGProcessor for better testability and management.
-# This RAG processor instance will be created once per server startup.
-# The Streamlit app will need to interact with endpoints on *this server* to add documents
-# before the agent calls the MCP tool.
-
-# Global instance (simple approach for now, consider dependency injection for larger apps)
-# This means the state (loaded documents) is held by this MCP server instance.
-# Your streamlit app will need to call an endpoint on this server to load docs.
 rag_processor = RAGProcessor()
-
 app = FastAPI(
     title=settings.PROJECT_NAME + " - MCP Server",
     version=settings.VERSION,
     description=settings.DESCRIPTION + " This server exposes tools via Model Context Protocol."
 )
 
+@app.on_event("startup")
+async def startup_event():
+    print(f"--- FastAPI app startup event: {datetime.datetime.now()} ---")
+    logger.info("FastAPI application startup complete. RAG Processor initialized.")
+
 def _tool_extract_features_from_specs(params: ExtractFeaturesParams) -> ExtractFeaturesResult:
-    """
-    Extracts specified features from pre-processed product documents.
-    """
-    logger.info(f"MCP Tool: extract_features_from_specs called with params: {params}")
+    logger.info(f"MCP Tool: _tool_extract_features_from_specs called with params: {params}")
     results_data: Dict[str, Dict[str, str]] = {}
-    
-    # Validate input parameters
     if not params.product_references:
+        logger.error("Validation error in _tool_extract_features_from_specs: No product references provided")
         raise ValueError("No product references provided")
     if not params.features_list:
+        logger.error("Validation error in _tool_extract_features_from_specs: No features specified for comparison")
         raise ValueError("No features specified for comparison")
-    
     for doc_ref in params.product_references:
         if doc_ref not in rag_processor.document_vector_stores:
             logger.warning(f"Document reference '{doc_ref}' not processed or not found by RAG processor.")
             results_data[doc_ref] = {feature: "Document not processed" for feature in params.features_list}
             continue
-            
         product_feature_values: Dict[str, str] = {}
         for feature_name in params.features_list:
             try:
-                # This extraction is based on the document's content loaded into the RAG processor
                 value = rag_processor.extract_feature_from_doc(doc_ref, feature_name)
                 if value is None or value.strip() == "":
                     value = "Feature not found"
                 product_feature_values[feature_name] = value
             except Exception as e:
-                logger.error(f"Error extracting feature '{feature_name}' from doc '{doc_ref}': {e}")
+                logger.error(f"Error extracting feature '{feature_name}' from doc '{doc_ref}': {e}", exc_info=True)
                 product_feature_values[feature_name] = f"Error: {str(e)}"
-                
         results_data[doc_ref] = product_feature_values
-        
-    logger.info(f"MCP Tool: extract_features_from_specs returning: {results_data}")
+    logger.info(f"MCP Tool: _tool_extract_features_from_specs returning: {results_data}")
     return ExtractFeaturesResult(comparison_data=results_data)
 
-# Helper function to extract features from file content (for simple Key: Value text files)
 def extract_features_from_text(file_path: str) -> List[str]:
+    print(f"    [PRINT DEBUG extract_features_from_text] Attempting for: {file_path} at {datetime.datetime.now()}")
+    logger.info(f"[LOG extract_features_from_text] Attempting for: {file_path}")
     features = set()
     try:
+        if not os.path.exists(file_path):
+            print(f"    [PRINT DEBUG extract_features_from_text] File not found: {file_path}")
+            logger.error(f"[LOG extract_features_from_text] File not found: {file_path}")
+            return []
         with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if ':' in line:
+            print(f"    [PRINT DEBUG extract_features_from_text] Successfully opened: {file_path}")
+            logger.info(f"[LOG extract_features_from_text] Successfully opened: {file_path}")
+            for i, line_content in enumerate(f):
+                line = line_content.strip()
+                if ':' in line: # Basic check for key: value pair
                     key, _ = line.split(':', 1)
-                    if key.strip(): # Ensure key is not empty
-                        features.add(key.strip())
-        logger.info(f"Inside extract_features_from_text - Extracted features from {os.path.basename(file_path)}: {sorted(list(features))}")
+                    key = key.strip()
+                    if key: # Ensure key is not empty
+                        features.add(key)
+        sorted_features = sorted(list(features))
+        print(f"    [PRINT DEBUG extract_features_from_text] Extracted from {os.path.basename(file_path)}: {sorted_features}")
+        logger.info(f"[LOG extract_features_from_text] Extracted: {sorted_features}")
+        return sorted_features
     except Exception as e:
-        logger.error(f"Error extracting features from file {file_path}: {e}")
-        # Return empty list if extraction fails
+        print(f"    [PRINT DEBUG extract_features_from_text] Error for {file_path}: {e}")
+        logger.error(f"[LOG extract_features_from_text] Error: {e}", exc_info=True)
         return []
-    return sorted(list(features))
 
-# --- Document Processing Endpoint ---
-# The Streamlit app will call this first for each uploaded file.
 @app.post("/mcp/process_document", response_model=ProcessDocumentResponse)
 async def process_document_endpoint(request: ProcessDocumentRequest):
-    print("DEBUG: Entered process_document_endpoint") # Add print statement for immediate feedback
-    logger.info("Entered /mcp/process_document endpoint.")
-    logger.info(f"Received request to process document: {request.doc_reference} from path: {request.file_path}")
-    success = rag_processor.add_document(request.doc_reference, request.file_path)
+    print(f"--- [PRINT DEBUG process_document_endpoint TOP LEVEL] Entered for {request.doc_reference}, path: {request.file_path} at {datetime.datetime.now()} ---")
     
-    logger.info(f"rag_processor.add_document returned success: {success}")
+    actual_extracted_features: List[str] = []
+    status = "failed" # Default status
+    message = "Processing error occurred." # Default error message
 
-    extracted_features = None
-    if success:
-        # If processing is successful, try to extract features from the file content
-        # This assumes the file is still accessible at the provided path.
-        # Need to handle different file types if necessary (currently only parsing text).
-        if request.file_path.lower().endswith(".txt"):
-            logger.info("Attempting to extract features from text file.") # Log before calling helper
-            extracted_features = extract_features_from_text(request.file_path)
-            logger.info(f"Extracted features for {request.doc_reference} (from extract_features_from_text): {extracted_features}")
+    try:
+        logger.info(f"[LOG process_document_endpoint] Entered for {request.doc_reference}, path: {request.file_path}")
+        print(f"  [PRINT DEBUG process_document_endpoint try block] Calling rag_processor.add_document for: {request.doc_reference}")
+        # Assuming RAGProcessor.add_document also handles PDF, etc.
+        # For .txt files, we also want to do simple key-value extraction.
+        success_rag = rag_processor.add_document(request.doc_reference, request.file_path)
+        print(f"  [PRINT DEBUG process_document_endpoint try block] rag_processor.add_document success: {success_rag}")
+        logger.info(f"[LOG process_document_endpoint] RAG add_document success: {success_rag}")
+
+        if success_rag:
+            status = "processed" # Base status if RAG processing is okay
+            message = "Document processed by RAG."
             
-        return ProcessDocumentResponse(doc_reference=request.doc_reference, status="processed", message="Document processed successfully.", extracted_features=extracted_features)
-    else:
-        raise HTTPException(status_code=500, detail=f"Failed to process document: {request.doc_reference}")
+            # Specifically for .txt files, attempt direct feature extraction
+            if request.file_path.lower().endswith(".txt"):
+                print(f"  [PRINT DEBUG process_document_endpoint try block] File is .txt, calling extract_features_from_text for: {request.file_path}")
+                actual_extracted_features = extract_features_from_text(request.file_path)
+                print(f"  [PRINT DEBUG process_document_endpoint try block] Features from extract_features_from_text: {actual_extracted_features}")
+                logger.info(f"[LOG process_document_endpoint] Text features extracted: {actual_extracted_features}")
+                if actual_extracted_features:
+                     message += " Features also parsed directly from text."
+                else:
+                     message += " No features parsed directly from text (file might be empty or lack 'key: value' lines)."
+            else:
+                # For non-txt files, features might be extracted differently or not at all by this simple method
+                logger.info(f"[LOG process_document_endpoint] File is not .txt ({request.file_path}), relying on RAG for any feature insights later.")
+                message += " File is not .txt, direct text parsing for features skipped."
+        else:
+            message = "RAG document processing failed."
+            logger.error(f"[LOG process_document_endpoint] RAG add_document failed for {request.doc_reference}.")
+            # status remains "failed", actual_extracted_features remains []
+        
+        response_payload = ProcessDocumentResponse(
+            doc_reference=request.doc_reference,
+            status=status, # Use the determined status
+            message=message,
+            extracted_features=actual_extracted_features # Use features from text parsing for .txt
+        )
+        print(f"--- [PRINT DEBUG process_document_endpoint try block] Returning: {response_payload.model_dump_json(indent=2)} ---")
+        logger.info(f"[LOG process_document_endpoint] Returning: {response_payload.status}, features count: {len(actual_extracted_features)}")
+        return response_payload
+
+    except Exception as e:
+        print(f"--- [PRINT DEBUG process_document_endpoint CATCH BLOCK] EXCEPTION for {request.doc_reference}: {type(e).__name__} - {e} ---")
+        traceback.print_exc() # Print full traceback to console
+        logger.error(f"[LOG process_document_endpoint CATCH BLOCK] Exception: {e}", exc_info=True)
+        return ProcessDocumentResponse(
+            doc_reference=request.doc_reference,
+            status="error",
+            message=f"Unexpected server error: {type(e).__name__} - {e}",
+            extracted_features=[] # Ensure an empty list on error
+        )
 
 @app.post("/mcp/clear_documents", status_code=204)
 async def clear_all_documents_endpoint():
-    logger.info("Received request to clear all documents.")
+    print(f"--- [PRINT DEBUG clear_all_documents_endpoint] Entered at {datetime.datetime.now()} ---")
+    logger.info("[LOG clear_all_documents_endpoint] Clearing documents.")
     rag_processor.clear_all_documents()
     return None
 
-# --- Main MCP Endpoint ---
 @app.post("/mcp")
 async def mcp_tool_router(call_request: MCPToolCallRequest) -> MCPToolCallResponse:
+    print(f"--- [PRINT DEBUG mcp_tool_router] Method: {call_request.method} at {datetime.datetime.now()} ---")
+    logger.info(f"[LOG mcp_tool_router] Method: {call_request.method}")
     try:
         if call_request.method == "extract_features_from_specs":
             try:
                 tool_params = ExtractFeaturesParams(**call_request.params)
                 result_data = _tool_extract_features_from_specs(tool_params)
-                return MCPToolCallResponse(result={"extract_features_from_specs": result_data.model_dump()})
+                response = MCPToolCallResponse(result={"extract_features_from_specs": result_data.model_dump()})
+                logger.info(f"[LOG mcp_tool_router] 'extract_features_from_specs' success.")
+                return response
             except ValueError as ve:
-                logger.error(f"Validation error in MCP call: {ve}")
+                logger.error(f"[LOG mcp_tool_router] Validation error: {ve}", exc_info=True)
                 return MCPToolCallResponse(error={"code": 400, "message": str(ve)})
             except Exception as e:
-                logger.error(f"Error processing MCP call for '{call_request.method}': {e}", exc_info=True)
+                logger.error(f"[LOG mcp_tool_router] Error in 'extract_features_from_specs': {e}", exc_info=True)
                 return MCPToolCallResponse(error={"code": 500, "message": f"Internal server error: {str(e)}"})
         else:
-            logger.error(f"Unknown MCP method: {call_request.method}")
+            logger.error(f"[LOG mcp_tool_router] Unknown method: {call_request.method}")
             return MCPToolCallResponse(error={"code": 400, "message": f"Unknown method: {call_request.method}"})
     except Exception as e:
-        logger.error(f"Unexpected error in MCP router: {e}", exc_info=True)
-        return MCPToolCallResponse(error={"code": 500, "message": "Internal server error"})
+        logger.error(f"[LOG mcp_tool_router] Unexpected error: {e}", exc_info=True)
+        return MCPToolCallResponse(error={"code": 500, "message": "Internal server error in router"})
 
 @app.get("/health", summary="Health Check", tags=["Management"])
 async def health_check():
-    logger.info("Health check endpoint called.")
     return {"status": "healthy", "rag_docs_loaded": len(rag_processor.document_vector_stores)}
 
 if __name__ == "__main__":
+    print(f"--- Running {__file__} directly (if __name__ == '__main__') ---")
     uvicorn.run(
         "app.mcp_server:app",
         host=settings.MCP_SERVER_HOST,
         port=settings.MCP_SERVER_PORT,
         reload=True,
-        log_level="info",
-        log_config=None # Keep this None as we are managing logging manually
+        log_level="info"
     )
