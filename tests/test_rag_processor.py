@@ -10,7 +10,6 @@ def test_rag_processor_initialization():
     assert processor.llm is not None
     assert processor.text_splitter is not None
     assert processor.document_vector_stores == {}
-    assert processor.document_texts == {}
 
 def test_process_document():
     """Test document processing."""
@@ -23,7 +22,6 @@ def test_process_document():
     success = processor.add_document(test_doc_ref, str(test_file_path))
     assert success
     assert test_doc_ref in processor.document_vector_stores
-    assert test_doc_ref in processor.document_texts
     test_file_path.unlink()
 
 def test_extract_feature():
@@ -53,5 +51,4 @@ def test_clear_documents():
     assert test_doc_ref in processor.document_vector_stores
     processor.clear_all_documents()
     assert processor.document_vector_stores == {}
-    assert processor.document_texts == {}
     test_file_path.unlink() 

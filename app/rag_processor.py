@@ -1,106 +1,147 @@
-# app/rag_processor.py
-from typing import List, Dict
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
-from langchain_core.documents import Document
-from langchain_core.runnables import RunnablePassthrough, RunnableParallel
-from langchain_core.output_parsers import StrOutputParser
-from pathlib import Path
+import os
 import logging
+from pathlib import Path
+from typing import Dict, Optional, Any
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.vectorstores import FAISS
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_community.callbacks.openai_info import OpenAICallbackHandler
 from app.core.config import settings
-from app.services.document_parser import DocumentParser
 
 logger = logging.getLogger(__name__)
 
 class RAGProcessor:
     def __init__(self):
-        self.embeddings = OpenAIEmbeddings(model=settings.EMBEDDING_MODEL_NAME)
+        self.embeddings = OpenAIEmbeddings(
+            model=settings.EMBEDDING_MODEL_NAME,
+            openai_api_key=settings.OPENAI_API_KEY
+        )
+        
+        self.llm = ChatOpenAI(
+            model_name=settings.LLM_MODEL_NAME,
+            openai_api_key=settings.OPENAI_API_KEY,
+            temperature=0.0
+        )
+        
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=settings.CHUNK_SIZE,
             chunk_overlap=settings.CHUNK_OVERLAP,
             length_function=len,
-            is_separator_regex=False,
+            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
         )
-        self.llm = ChatOpenAI(model_name=settings.LLM_MODEL_NAME, temperature=0)
+        
         self.document_vector_stores: Dict[str, FAISS] = {}
-        self.document_texts: Dict[str, str] = {}
+        
+        logger.info(f"RAGProcessor initialized with model: {settings.LLM_MODEL_NAME}, embeddings: {settings.EMBEDDING_MODEL_NAME}")
 
-    def add_document(self, doc_reference: str, file_path: str) -> bool:
-        """
-        Processes a single document (PDF or TXT) by its file path, chunks it, embeds it, and stores it in a FAISS vector store associated with the doc_reference.
-        """
-        logger.info(f"Processing document: {file_path} with reference: {doc_reference}")
+    def add_document(self, document_reference: str, file_path: str) -> bool:
         try:
-            loaded_docs: List[Document] = DocumentParser.load_document(file_path)
-            if not loaded_docs:
-                logger.error(f"No content loaded from {file_path}")
+            path_obj = Path(file_path)
+            if not path_obj.exists():
+                logger.error(f"File does not exist: {file_path}")
                 return False
-            doc_content = loaded_docs[0].page_content
-            self.document_texts[doc_reference] = doc_content
-            chunks = self.text_splitter.split_text(doc_content)
-            doc_chunks = [Document(page_content=chunk, metadata={"source": Path(file_path).name, "doc_ref": doc_reference}) for chunk in chunks]
-            if not doc_chunks:
-                logger.warning(f"No chunks created for document: {doc_reference}")
+            
+            file_extension = path_obj.suffix.lower()
+            
+            if file_extension == '.pdf':
+                loader = PyPDFLoader(file_path)
+            elif file_extension == '.txt':
+                loader = TextLoader(file_path, encoding='utf-8')
+            else:
+                logger.error(f"Unsupported file type: {file_extension}")
                 return False
-            vector_store = FAISS.from_documents(doc_chunks, self.embeddings)
-            self.document_vector_stores[doc_reference] = vector_store
-            logger.info(f"Successfully processed and vectorized document: {doc_reference} from {file_path}")
+            
+            documents = loader.load()
+            logger.info(f"Loaded {len(documents)} pages/sections from {file_path}")
+            
+            if not documents:
+                logger.warning(f"No content loaded from {file_path}")
+                return False
+            
+            chunks = self.text_splitter.split_documents(documents)
+            logger.info(f"Split into {len(chunks)} chunks for {document_reference}")
+            
+            if not chunks:
+                logger.warning(f"No chunks created from {file_path}")
+                return False
+            
+            vector_store = FAISS.from_documents(chunks, self.embeddings)
+            
+            self.document_vector_stores[document_reference] = vector_store
+            logger.info(f"Document {document_reference} successfully processed and stored")
+            
             return True
+            
         except Exception as e:
-            logger.error(f"Failed to process document {doc_reference} from {file_path}: {e}")
+            logger.error(f"Error processing document {document_reference}: {e}", exc_info=True)
             return False
 
-    def extract_feature_from_doc(self, doc_reference: str, feature_name: str) -> str:
-        """
-        Extracts a specific feature value from a specific processed document identified by doc_reference.
-        """
-        if doc_reference not in self.document_vector_stores:
-            logger.warning(f"Document reference '{doc_reference}' not found in vector stores.")
-            return "Document not processed"
-        vector_store = self.document_vector_stores[doc_reference]
-        retriever = vector_store.as_retriever(search_kwargs={"k": settings.RAG_TOP_K_RESULTS})
-        prompt_template_str = """
-        You are an expert assistant specialized in extracting specific information from product specification sheets.
-        Your task is to find the value for the feature: '{feature_name}'.
-        Use ONLY the provided "Context from Specification Sheet" to answer.
-        If the feature '{feature_name}' is explicitly mentioned with a clear value in the context, provide that value.
-        If the feature is mentioned but its value is ambiguous or not clearly stated, respond with "Value unclear".
-        If the feature '{feature_name}' is not mentioned at all in the context, respond with "Not found".
-        Do not infer or make assumptions beyond the provided text.
-        Context from Specification Sheet:
-        {context}
-        Feature to Extract: {feature_name}
-        Extracted Value:
-        """
-        prompt = ChatPromptTemplate.from_template(prompt_template_str)
-        rag_chain = (
-            RunnableParallel(
-                {"context": retriever, "feature_name": RunnablePassthrough()}
-            )
-            | (lambda x: {"context": "\n---\n".join(doc.page_content for doc in x["context"]), "feature_name": x["feature_name"]})
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-        logger.info(f"Extracting feature '{feature_name}' from document '{doc_reference}'")
+    def extract_feature_from_doc(self, document_reference: str, feature_name: str) -> Optional[str]:
+        if document_reference not in self.document_vector_stores:
+            logger.warning(f"Document {document_reference} not found in vector stores")
+            return None
+        
+        vector_store = self.document_vector_stores[document_reference]
+        
         try:
-            response_content = rag_chain.invoke(feature_name)
-            logger.info(f"LLM response for '{feature_name}' in '{doc_reference}': {response_content}")
-            if "Not found" in response_content: return "Not found"
-            if "Value unclear" in response_content: return "Value unclear"
-            return response_content.strip()
+            query = f"What is the {feature_name}? {feature_name} specification value details"
+            docs = vector_store.similarity_search(query, k=settings.RAG_TOP_K_RESULTS)
+            
+            if not docs:
+                logger.info(f"No relevant documents found for feature '{feature_name}' in {document_reference}")
+                return "Not found"
+            
+            context = "\n\n".join([doc.page_content for doc in docs])
+            
+            prompt_template = ChatPromptTemplate.from_template("""
+Based on the following context from a product specification document, extract the value for "{feature_name}".
+
+Context:
+{context}
+
+Instructions:
+1. Look for the specific feature "{feature_name}" in the context
+2. Return ONLY the value (e.g., "16GB", "Intel i7", "5.5 inches")
+3. If the feature is not found, return "Not found"
+4. If the value is unclear or ambiguous, return "Unclear"
+5. Do not include units unless they are part of the standard specification
+
+Feature: {feature_name}
+""")
+            
+            chain = prompt_template | self.llm | StrOutputParser()
+            
+            handler = OpenAICallbackHandler()
+            result = chain.invoke({
+                "feature_name": feature_name,
+                "context": context
+            }, callbacks=[handler])
+            
+            logger.info(f"Feature extraction for '{feature_name}' - Tokens: {handler.total_tokens}, Cost: ${handler.total_cost:.4f}")
+            
+            result = result.strip()
+            logger.info(f"Extracted '{feature_name}' from {document_reference}: '{result}'")
+            
+            return result
+            
         except Exception as e:
-            logger.error(f"Error during feature extraction for '{feature_name}' in '{doc_reference}': {e}")
-            return "Extraction error"
+            logger.error(f"Error extracting feature '{feature_name}' from {document_reference}: {e}", exc_info=True)
+            return f"Error: {str(e)}"
 
     def clear_all_documents(self) -> None:
-        """Clears all loaded document vector stores and texts."""
         self.document_vector_stores.clear()
-        self.document_texts.clear()
-        logger.info("All document data cleared from RAG processor.")
+        logger.info("All documents cleared from RAG processor")
+
+    def get_processed_documents(self) -> Dict[str, Any]:
+        return {
+            doc_ref: {
+                "chunks_count": vector_store.index.ntotal if hasattr(vector_store.index, 'ntotal') else "Unknown"
+            }
+            for doc_ref, vector_store in self.document_vector_stores.items()
+        }
 
 # Example Usage (for testing this module independently)
 if __name__ == '__main__':

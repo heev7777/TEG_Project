@@ -22,8 +22,9 @@ class Settings(BaseSettings):
 
     # LLM and LangSmith
     OPENAI_API_KEY: str
+    OPENAI_SCREENSHOT_KEY: str = os.getenv("OPENAI_SCREENSHOT_KEY", "") # New key for screenshot processing
     LANGCHAIN_TRACING_V2: str = os.getenv("LANGCHAIN_TRACING_V2", "true")
-    LANGCHAIN_ENDPOINT: str = os.getenv("LANGCHAIN_ENDPOINT", "https_api.smith.langchain.com") # Corrected https
+    LANGCHAIN_ENDPOINT: str = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
     LANGCHAIN_API_KEY: str
     LANGCHAIN_PROJECT: str = os.getenv("LANGCHAIN_PROJECT", "Product-Comparison-Assistant")
     LLM_MODEL_NAME: str = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")

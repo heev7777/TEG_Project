@@ -7,30 +7,29 @@ class ExtractFeaturesToolInputSchema(BaseModel):
     features_list_str: str = Field(description="A comma-separated string of features to extract (e.g., 'RAM,Price').")
 
 class ExtractFeaturesParams(BaseModel):
-    product_references: List[str] = Field(..., description="List of unique references for processed product documents.")
-    features_list: List[str] = Field(..., description="List of features to extract.")
+    product_references: List[str]
+    features_list: List[str]
 
 class ExtractFeaturesResult(BaseModel):
     comparison_data: Dict[str, Dict[str, str]]
 
 class MCPToolCallRequest(BaseModel):
-    # tool_name: str # This was in your agents.py but not in the original schema for the /mcp endpoint
     method: str
-    params: Dict[str, Any] = Field(default_factory=dict)
+    params: Dict
 
 class MCPToolCallResponse(BaseModel):
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[Dict[str, Any]] = None
+    result: Optional[Dict] = None
+    error: Optional[Dict] = None
 
 class ProcessDocumentRequest(BaseModel):
-    doc_reference: str = Field(..., description="A unique reference ID for the document.")
-    file_path: str = Field(..., description="Absolute path to the document file on the server filesystem.")
+    doc_reference: str
+    file_path: str
 
 class ProcessDocumentResponse(BaseModel):
     doc_reference: str
     status: str
-    message: Optional[str] = None
-    extracted_features: List[str] = Field(default_factory=list) # MODIFIED: Default to empty list
+    message: str
+    extracted_features: List[str]
 
 # --- Tool Input Schemas ---
 # Schema for the compare_product_features_via_mcp tool
@@ -49,8 +48,26 @@ class ComparisonRequest(BaseModel):
     products_to_compare: List[str]
 
 class ComparisonResponse(BaseModel):
+    comparison_data: Dict[str, Dict[str, str]]
+    summary: str
+
+# --- NEW: Screenshot Processing Schemas ---
+class ProcessScreenshotRequest(BaseModel):
+    doc_reference: str
+    image_base64: str
+    image_filename: str
+
+class ProcessScreenshotResponse(BaseModel):
+    doc_reference: str
     status: str
-    message: Optional[str] = None
-    data: Optional[Dict[str, Dict[str, str]]] = None
-    text_summary: Optional[str] = None
-    missing_features: Optional[Dict[str, List[str]]] = None
+    message: str
+    extracted_features: List[str]
+    image_filename: str
+
+class ExtractFeaturesFromScreenshotParams(BaseModel):
+    screenshot_references: List[str]
+    features_list: List[str]
+    product_names: Optional[List[str]] = None
+
+class ExtractFeaturesFromScreenshotResult(BaseModel):
+    comparison_data: Dict[str, Dict[str, str]]
