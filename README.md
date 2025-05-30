@@ -82,7 +82,7 @@ A sophisticated Python application that leverages **RAG**, **Multi-Agent Systems
 
 1. **Clone Repository**
 ```bash
-git clone <repository-url>
+git clone <https://github.com/heev7777/TEG_Project.git>
 cd TEG_Project
 ```
 
@@ -96,7 +96,7 @@ Create `.env` file:
 ```env
 # Required - OpenAI Configuration
 OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_SCREENSHOT_KEY=your_screenshot_api_key_here  # Optional, can be same as above
+OPENAI_SCREENSHOT_KEY=your_screenshot_api_key_here
 
 # LangSmith Observability
 LANGCHAIN_TRACING_V2=true
@@ -184,44 +184,44 @@ python -m pytest tests/test_product_comparison.py -v
 
 ## 📊 TEG Course Requirements Compliance
 
-### ✅ RAG Implementation (20 pts)
+### ✅ RAG Implementation
 - **Chunking**: Recursive text splitting with optimal parameters
 - **Vector Store**: FAISS with OpenAI embeddings
 - **Prompt Grounding**: Contextual feature extraction with retrieved chunks
 - **Multi-document**: Isolated vector stores per document
 
-### ✅ Multi-Agent Systems (20 pts)
+### ✅ Multi-Agent Systems
 - **Planner/Executor Pattern**: 
   - Streamlit UI = Planner (user intent, task coordination)
   - Agents = Executors (comparison, summarization, screenshot analysis)
 - **Agent Specialization**: Separate agents for different data types
 - **Tool Orchestration**: Agents coordinate via MCP protocol
 
-### ✅ MCP Integration (20 pts)
+### ✅ MCP Integration
 - **Custom MCP Server**: FastAPI-based tool server
 - **Safe Tool Calls**: Input validation, error handling, timeout management
 - **Multiple Tools**: Document processing, feature extraction, screenshot analysis
 - **Protocol Compliance**: Standard MCP request/response format
 
-### ✅ Solution Architecture (20 pts)
+### ✅ Solution Architecture
 - **Frontend ↔ Backend**: Streamlit ↔ FastAPI separation
 - **Scalability**: Modular design, async operations, vector store optimization
 - **Security**: API key management, input sanitization, file validation
 - **Database**: FAISS vector stores for efficient similarity search
 
-### ✅ LangSmith Monitoring (5 pts)
+### ✅ LangSmith Monitoring
 - **Comprehensive Tracing**: All LLM calls logged with metadata
 - **Cost Tracking**: Real-time token usage and cost monitoring
 - **Error Tracking**: Failed operations logged with context
 - **Performance Metrics**: Response times and success rates
 
-### ✅ Code Quality (10 pts)
+### ✅ Code Quality
 - **Clean Python**: Type hints, docstrings, PEP 8 compliance
 - **Modular Design**: Clear separation of concerns
 - **Error Handling**: Comprehensive exception management
 - **Documentation**: Extensive comments and documentation
 
-### ✅ Git Workflow (5 pts)
+### ✅ Git Workflow
 - **Clean Commits**: Descriptive commit messages
 - **Project Structure**: Organized directory layout
 - **`.gitignore`**: Proper exclusion of sensitive files and artifacts
@@ -356,6 +356,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Author**: [Your Name]  
+**Author**: Enre Ertan s23372 
 **Course**: TEG - Generative AI Technologies  
-**Academic Year**: 2024/2025

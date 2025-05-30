@@ -112,7 +112,7 @@ summary = generate_comparison_summary(comparison_data)
 
 ---
 
-## 🔗 MCP Integration (20 pts)
+## 🔗 MCP Integration
 
 ### **Custom FastAPI MCP Server**
 ```python

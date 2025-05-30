@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import uvicorn
 import logging
 import os
@@ -15,6 +15,9 @@ from app.core.schemas import (
 )
 from app.rag_processor import RAGProcessor
 from app.screenshot_processor import ScreenshotProcessor
+from langchain.schema.messages import HumanMessage, SystemMessage
+from langchain.chat_models import ChatOpenAI
+from langchain.callbacks import get_openai_callback
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +33,94 @@ app = FastAPI(
     version=settings.VERSION,
     description=settings.DESCRIPTION + " This server exposes tools via Model Context Protocol."
 )
+
+# Placeholder for the web search LLM, can be initialized like screenshot_processor.llm
+# For simplicity, the helper function _search_web_for_feature will create it on demand.
+# web_search_llm = None 
+
+# Web search helper function
+async def _search_web_for_feature(
+    product_name: Optional[str], 
+    feature_name: str, 
+    original_screenshot_filename: Optional[str] = None,
+    # Pass screenshot_processor to access its cost tracking, or use a dedicated one
+    # For now, let's assume costs are tracked if get_openai_callback is used within.
+) -> str:
+    logger.info(f"Attempting web search for feature '{feature_name}' of product '{product_name or 'unknown'}' (original file: {original_screenshot_filename})")
+    
+    if not settings.OPENAI_SCREENSHOT_KEY:
+        logger.error("API key for web search (using OPENAI_SCREENSHOT_KEY) not configured.")
+        return "Web search disabled"
+
+    web_llm = ChatOpenAI(
+        model="gpt-4o",
+        api_key=settings.OPENAI_SCREENSHOT_KEY,
+        max_tokens=300,
+        temperature=0.2 
+    )
+
+    context_parts = []
+    if product_name:
+        context_parts.append(f"Product: {product_name}")
+    # Potentially use screenshot_processor.processed_screenshots[screenshot_ref]['filename']
+    # if original_screenshot_filename is not directly available here.
+    # This example assumes original_screenshot_filename would be passed if available.
+    if original_screenshot_filename:
+         if screenshot_obj_data := screenshot_processor.processed_screenshots.get(original_screenshot_filename):
+            actual_filename = screenshot_obj_data.get("filename", "unknown_file")
+            context_parts.append(f"Original source hint (filename): {actual_filename}")
+    
+    context_str = ", ".join(context_parts)
+    if not context_str:
+        # If product name is also None, this becomes "a general product"
+        context_str = product_name or "a general product"
+
+
+    prompt_text = f"""
+    You are an expert product researcher. A previous attempt to extract the feature '{feature_name}' for '{context_str}' from a provided image failed (it was 'Not found').
+    Imagine you have now performed a thorough web search for this specific product and feature.
+
+    Based on your general knowledge and the information '{context_str}', what is the most likely value for the feature '{feature_name}'?
+
+    Provide ONLY the value.
+    If, even with a simulated web search, you cannot confidently determine the value, return "Not found on web".
+    Do not add any explanations, apologies, or any text other than the direct value or "Not found on web".
+    
+    Feature to find: {feature_name}
+    Product context: {context_str}
+
+    Example for 'Display Type' for 'ASUS ROG Strix G16 Ultra 7-255HX': "16-inch 2.5K 240Hz Nebula Display"
+    Example for 'RAM' for 'MacBook Air M2': "8GB" 
+    Example for 'Price' for 'Samsung Galaxy S23': "799 USD" (use common currency if not specified)
+    """
+    
+    # System message to guide the LLM's persona
+    system_msg = SystemMessage(content="You are an AI assistant simulating web search to find missing product specifications. Provide concise answers: just the value or 'Not found on web'.")
+    human_msg = HumanMessage(content=prompt_text)
+
+    try:
+        with get_openai_callback() as cb: # Tracks cost for this specific call
+            response = await web_llm.ainvoke([system_msg, human_msg])
+            # Log this specific call's cost. Global cost tracking is in screenshot_processor for its calls.
+            # If you want separate tracking for web searches, you'll need another set of global counters.
+            logger.info(f"Web search (simulated) LLM call for '{feature_name}' - Tokens: {cb.total_tokens}, Cost: ${cb.total_cost:.4f}")
+            # Example: Accumulate web search costs if needed
+            # settings.TOTAL_WEB_SEARCH_COST += cb.total_cost 
+
+        value = response.content.strip()
+        logger.info(f"Web search simulation for '{feature_name}' of '{product_name or context_str}' yielded: '{value}'")
+        
+        # Basic validation for the response
+        if not value or len(value) > 150 or value.lower() == "not found": # Avoid "Not found" loop
+             return "Not found on web" # Standardize if LLM returns slightly different "not found"
+        if "error" in value.lower() or "sorry" in value.lower() or "unable" in value.lower():
+            logger.warning(f"Web search LLM indicated inability for '{feature_name}' ('{product_name}'): {value}")
+            return "Not found on web"
+            
+        return value
+    except Exception as e:
+        logger.error(f"Error during web search simulation for '{feature_name}' of '{product_name}': {e}", exc_info=True)
+        return "Web search error"
 
 @app.on_event("startup")
 async def startup_event():
@@ -165,7 +256,7 @@ async def mcp_tool_router(call_request: MCPToolCallRequest) -> MCPToolCallRespon
         elif call_request.method == "extract_features_from_screenshots":
             try:
                 tool_params = ExtractFeaturesFromScreenshotParams(**call_request.params)
-                result_data = _tool_extract_features_from_screenshots(tool_params)
+                result_data = await _tool_extract_features_from_screenshots(tool_params)
                 response = MCPToolCallResponse(result={"extract_features_from_screenshots": result_data.model_dump()})
                 logger.info("extract_features_from_screenshots completed successfully")
                 return response
@@ -250,10 +341,12 @@ async def process_screenshot_endpoint(request: ProcessScreenshotRequest):
             image_filename=request.image_filename
         )
 
-def _tool_extract_features_from_screenshots(params: ExtractFeaturesFromScreenshotParams) -> ExtractFeaturesFromScreenshotResult:
+async def _tool_extract_features_from_screenshots(params: ExtractFeaturesFromScreenshotParams) -> ExtractFeaturesFromScreenshotResult:
     logger.info(f"Extract features from screenshots called with {len(params.screenshot_references)} screenshots for {len(params.features_list)} features")
     
     results_data: Dict[str, Dict[str, str]] = {}
+    MAX_WEB_SEARCHES_PER_CALL = 4 
+    web_searches_done_this_call = 0
 
     if not params.screenshot_references:
         logger.error("No screenshot references provided")
@@ -268,7 +361,10 @@ def _tool_extract_features_from_screenshots(params: ExtractFeaturesFromScreensho
         if params.product_names and i < len(params.product_names):
             product_name = params.product_names[i]
         
-        logger.info(f"Processing screenshot '{screenshot_ref}' for product '{product_name or 'any'}'")
+        # Get the actual filename for context if needed by web search
+        original_filename_for_search = screenshot_processor.processed_screenshots.get(screenshot_ref, {}).get("filename")
+
+        logger.info(f"Processing screenshot '{screenshot_ref}' (File: {original_filename_for_search}) for product '{product_name or 'any'}'")
         
         if screenshot_ref not in screenshot_processor.processed_screenshots:
             logger.warning(f"Screenshot '{screenshot_ref}' not processed")
@@ -283,6 +379,35 @@ def _tool_extract_features_from_screenshots(params: ExtractFeaturesFromScreensho
                     feature_name, 
                     product_name
                 )
+                # ---- BEGIN WEB SEARCH MODIFICATION ----
+                if value.strip().lower() == "not found" and web_searches_done_this_call < MAX_WEB_SEARCHES_PER_CALL:
+                    logger.info(f"Feature '{feature_name}' for '{product_name or screenshot_ref}' is 'Not found'. Attempting web search ({web_searches_done_this_call + 1}/{MAX_WEB_SEARCHES_PER_CALL}).")
+                    
+                    # Ensure product_name is sensible. If not available, try to infer from screenshot_ref or filename
+                    effective_product_name_for_search = product_name
+                    if not effective_product_name_for_search and original_filename_for_search:
+                        # Basic inference from filename, can be improved
+                        name_part = original_filename_for_search.split('.')[0].replace('_', ' ')
+                        logger.info(f"No explicit product name, using inferred '{name_part}' from filename for web search.")
+                        effective_product_name_for_search = name_part
+                    
+                    # Pass the screenshot_ref to _search_web_for_feature, so it can retrieve the actual filename if needed
+                    web_search_value = await _search_web_for_feature(
+                        effective_product_name_for_search, 
+                        feature_name,
+                        screenshot_ref # Pass screenshot_ref (which is the doc_reference)
+                    )
+                    
+                    if web_search_value not in ["Not found on web", "Web search disabled", "Web search error"]:
+                        logger.info(f"Web search successful for '{feature_name}' of '{effective_product_name_for_search}'. Old: '{value}', New: '{web_search_value}'")
+                        value = web_search_value
+                        web_searches_done_this_call += 1
+                    else:
+                        logger.info(f"Web search for '{feature_name}' of '{effective_product_name_for_search}' did not yield a usable result: '{web_search_value}'")
+                elif value.strip().lower() == "not found":
+                     logger.info(f"Feature '{feature_name}' for '{product_name or screenshot_ref}' is 'Not found'. Web search limit reached or not applicable.")
+                # ---- END WEB SEARCH MODIFICATION ----
+                
                 screenshot_feature_values[feature_name] = value
                 logger.debug(f"Extracted '{feature_name}': '{value}'")
             except Exception as e:
