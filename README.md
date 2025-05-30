@@ -356,5 +356,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Author**: Enre Ertan s23372 
-**Course**: TEG - Generative AI Technologies  
+**Author**: Emre Ertan s23372 
+**Course**: TEG
