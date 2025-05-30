@@ -30,7 +30,7 @@ class RAGProcessor:
             chunk_size=settings.CHUNK_SIZE,
             chunk_overlap=settings.CHUNK_OVERLAP,
             length_function=len,
-            separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""]
+            separators=["\n\n", "\n", ".", "!", "?", ",", " "]
         )
         
         self.document_vector_stores: Dict[str, FAISS] = {}
