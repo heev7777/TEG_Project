@@ -16,8 +16,8 @@ from app.core.schemas import (
 from app.rag_processor import RAGProcessor
 from app.screenshot_processor import ScreenshotProcessor
 from langchain.schema.messages import HumanMessage, SystemMessage
-from langchain.chat_models import ChatOpenAI
-from langchain.callbacks import get_openai_callback
+from langchain_community.chat_models import ChatOpenAI
+from langchain_community.callbacks.manager import get_openai_callback
 
 logging.basicConfig(
     level=logging.INFO,
