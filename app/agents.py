@@ -27,7 +27,7 @@ async def run_comparison_tool_directly(product_doc_refs: List[str], features_to_
             response = await client.post(
                 f"{settings.MCP_SERVER_URL}/mcp",
                 json=request_payload.model_dump(),
-                timeout=60.0
+                timeout=300.0
             )
             response.raise_for_status()
             
